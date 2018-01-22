@@ -1,0 +1,301 @@
+' ******************************************************************************
+' C:\Users\mtenuta\Documents\SolidworksProject\TestMacro.swb - macro recorded on 08/02/17 by mtenuta
+' ******************************************************************************
+'Run this Macro from the Assembly
+Option Explicit
+Dim swApp As SldWorks.SldWorks
+Dim swModel As SldWorks.ModelDoc2
+Dim swModelDocExt As SldWorks.ModelDocExtension
+Dim swAssem As SldWorks.AssemblyDoc
+Dim pIntMgr As SldWorks.InterferenceDetectionMgr
+Dim interference As IInterference
+
+Dim xlApp As Excel.Application
+Dim xlWB As Excel.Workbook
+Dim xlWS As Excel.Worksheet
+Public vModels As Variant
+Dim boolstatus As Boolean
+Dim longstatus As Long, longwarnings As Long
+Public arrTestVals() As String
+Public i As Integer
+
+Sub main()
+
+    'Opens the Solidworks model
+    Set swApp = Application.SldWorks
+    Set swModel = swApp.OpenDoc("C:\Users\mtenuta\Documents\SolidworksProject\AssemblyName.sldasm", swDocASSEMBLY) /* ***** */
+    Set swAssem = swModel
+    Set pIntMgr = swAssem.InterferenceDetectionManager
+    
+    pIntMgr.TreatCoincidenceAsInterference = False
+    pIntMgr.TreatSubAssembliesAsComponents = True
+    pIntMgr.IncludeMultibodyPartInterferences = True
+    pIntMgr.MakeInterferingPartsTransparent = False
+    pIntMgr.CreateFastenersFolder = True
+    pIntMgr.IgnoreHiddenBodies = True
+    pIntMgr.ShowIgnoredInterferences = False
+    pIntMgr.UseTransform = True
+    
+    ' Specify how to display non-interfering components
+    'pIntMgr.NonInterferingComponentDisplay = swNonInterferingComponentDisplay_Wireframe
+    
+    
+    'checks if Excel is open. If it is, it pulls up the window and opens the workbook. Otherwise, it opens excel and the workbook.
+    If FileInUse("C:\Users\mtenuta\Documents\SolidworksProject\MacroTestSheet.xlsx") Then  /* *** */
+        Set xlApp = GetObject(, "Excel.Application")
+        Set xlWB = xlApp.Workbooks("MacroTestSheet.xlsx")     /* ***** */
+        Set xlWS = xlWB.Worksheets("Worksheet1")              /* ***** */
+    Else
+        Set xlApp = CreateObject("Excel.Application")
+        xlApp.Visible = True
+        SetAttr "C:\Users\mtenuta\Documents\SolidworksProject\MacroTestSheet.xlsx", vbNormal                 /* ***** */
+        Set xlWB = Excel.Workbooks.Open("C:\Users\mtenuta\Documents\SolidworksProject\MacroTestSheet.xlsx")  /* ***** */
+        Set xlWS = xlWB.Worksheets("Worksheet1")
+    End If
+    xlWB.Windows(1).Visible = True
+    xlWS.Activate
+    
+    'set colors in excel to show what is running or complete
+    For i = 8 To 19
+        xlWS.Cells(i, "N").Interior.ColorIndex = 3
+    Next i
+    
+    'load test parameters and store in array lines
+    Dim testSets() As String 'Should have 12 tests run
+    Dim testNum As Integer
+    testNum = 0
+    Open "C:\Users\mtenuta\Documents\SolidworksProject\TestParameters.txt" For Input As #2    /* ***** */
+    Do While EOF(2) = False
+        ReDim Preserve testSets(testNum)
+        Line Input #2, testSets(testNum)
+        testNum = testNum + 1 'contains the actual number of sests, not 0 based number
+        
+        'create an array of the sets of testing parameters. Will interpret the lines when modifying the equations file.
+    Loop
+    Close #2
+
+    'for each line, split into values. Plug into eqn doc. Rebuild. Capture errors.
+    For i = 0 To (UBound(testSets) - LBound(testSets))
+        arrTestVals = Split(testSets(i), " ")
+        Call UpdateEqnDoc
+        swApp.ActiveDoc.ForceRebuild3 (False)
+        Call CatchErrors
+        xlWB.Save
+    Next i
+    'Resets document to default parameters
+    arrTestVals = Split(testSets(0), " ")
+    Call UpdateEqnDoc
+    swApp.ActiveDoc.ForceRebuild3 (False)
+
+    
+End Sub
+
+Private Sub CatchErrors()
+    Dim index As Long
+    
+    Dim vInts As Variant
+    Dim m As Long
+    Dim b As Long
+    Dim interference As IInterference
+    Dim vComps As Variant
+    Dim comp As Component2
+    Dim vTrans As Variant
+    Dim ret As Boolean
+    Dim vol As Long
+    Dim count As Integer
+    
+    count = 0
+    
+    vModels = swApp.GetDocuments 'if error occurs here make sure debug begins in main subs code block
+
+    Dim feat As Variant
+    Dim featureName As String
+    Dim IsWarning As Boolean
+    Dim Error As Long
+    Dim Element As Variant
+    
+    'holders for data from GetwhatsWrong function
+    Dim eFeatures As Variant
+    Dim eErrorCodes As Variant
+    Dim eWarnings As Variant
+    
+    'Strings to push to excel file
+    Dim nameStr As Variant
+    Dim featStr As Variant
+    Dim errStr As Variant
+    Dim warStr As Variant
+    Dim intStr As Variant
+    
+    'cycle through all open models (assembly and parts)
+    For index = LBound(vModels) To UBound(vModels)
+        Set swModel = vModels(index)
+        Set swModelDocExt = swModel.Extension
+        
+        If swModel Is Nothing Then
+            Exit Sub
+        End If
+        
+        'Captures error statements and outputs true if function run successfully.
+        boolstatus = swModelDocExt.GetWhatsWrong(eFeatures, eErrorCodes, eWarnings)
+        If boolstatus = False Then
+            MsgBox ("GetWhatsWrong Unsuccessful.")
+            Exit Sub
+        End If
+        
+        If Not IsEmpty(eFeatures) Then
+            Dim k As Integer
+            For k = 0 To UBound(eFeatures, 1) - LBound(eFeatures, 1)
+                Set feat = eFeatures(k)
+                nameStr = nameStr & swModel.GetTitle & vbCrLf 'Left(swModel.GetTitle, InStrRev(swModel.GetTitle, "-")
+                featStr = featStr + feat.GetTypeName2 + vbCrLf
+                errStr = errStr + CStr(eErrorCodes(k)) + vbCrLf
+                warStr = warStr + CStr(eWarnings(k)) + vbCrLf
+                'MsgBox ("Fix the model, fool!")
+
+            Next k
+            Erase eFeatures
+            Erase eErrorCodes
+            Erase eWarnings
+        Else
+            nameStr = "N/A"
+        End If
+    Next index
+    
+    ' Run interference detection
+    vInts = pIntMgr.GetInterferences
+    ret = pIntMgr.GetComponentsAndTransforms(vComps, vTrans)
+    If Not IsEmpty(vInts) Then
+     For m = 0 To UBound(vInts)
+        Set interference = vInts(m)
+        vol = interference.Volume
+        If (vol * 1000) > 1 Then  'greater than 1e-6 mm^3
+            vComps = interference.Components
+            intStr = intStr + "Interference " & (m + 1) & ": "
+            For b = 0 To UBound(vComps)
+                Set comp = vComps(b)
+                intStr = intStr & "    " & comp.Name2
+            Next b
+            intStr = intStr + vbCrLf
+            count = count + 1
+        End If
+     Next m
+    End If
+   'Prints data to excel
+    
+    xlWS.Cells((i + 8), "I").Value = LTrim(nameStr)  'Part Name
+    xlWS.Cells((i + 8), "J").Value = LTrim(featStr)     'Feature Name
+    xlWS.Cells((i + 8), "K").Value = LTrim(errStr)     'Error Code
+    xlWS.Cells((i + 8), "L").Value = LTrim(warStr)    'Warning
+    xlWS.Cells((i + 8), "M").Value = LTrim(intStr)    'interferences
+    
+    If Len(LTrim(errStr)) > 1 Then
+            xlWS.Cells((i + 8), "N").Interior.ColorIndex = 6        'Color to yellow if error
+    Else
+            xlWS.Cells((i + 8), "N").Interior.ColorIndex = 4        'Color to green after ran
+    End If
+    
+    If count > 0 Then
+            xlWS.Cells((i + 8), "N").Interior.ColorIndex = 6        'Color to yellow if error
+    End If
+    
+    'resets string variables for next loop
+    nameStr = " "
+    featStr = " "
+    errStr = " "
+    warStr = " "
+    intStr = " "
+
+End Sub
+
+
+Private Sub UpdateEqnDoc()
+'Take input of test parameters and input them into the eqn doc
+    Dim strFinal As String
+    Dim strLine As String
+    Dim arrLine() As String
+    If IsArrayAllocated(arrTestVals) = False Then
+        MsgBox ("arrTestVals is not allocated inside updateEqnDoc")
+        Exit Sub
+    End If
+    
+    'Remove beginning document characters from txt doc.
+    strFinal = Left(arrTestVals(0), 3)
+    If StrComp("ï»¿", Left(arrTestVals(0), 3), vbTextCompare) = 0 Then
+        arrTestVals(0) = Mid(arrTestVals(0), 4)
+    End If
+    
+    
+    Close #1
+    Open "C:\Users\mtenuta\Documents\SolidworksProject\ModelEquations.txt" For Input As #1 /* ***** */
+    strFinal = " "
+    
+    Do While EOF(1) = False
+        Line Input #1, strLine
+        
+        arrLine = Split(strLine, " ")
+        
+        If IsArrayAllocated(arrLine) = True Then
+            If Len(arrLine(0)) > 3 And StrComp("ï»¿", Left(arrLine(0), 3)) = 0 Then
+                arrLine(0) = Mid(arrLine(0), 4)
+            End If
+            Else
+                strFinal = strFinal + vbCrLf
+                GoTo Jump 'go to "Erase arrline"
+        End If
+        
+        If StrComp(arrLine(0), """Variable1""=") = 0 Then                    /* ***** */
+            strFinal = strFinal & ModifyDoc(arrLine, arrTestVals(0))
+        ElseIf StrComp(arrLine(0), """Variable2""=") = 0 Then                /* ***** */
+            strFinal = strFinal + ModifyDoc(arrLine, arrTestVals(1))
+        ElseIf StrComp(arrLine(0), """Variable3""=") = 0 Then                /* ***** */
+            strFinal = strFinal + ModifyDoc(arrLine, arrTestVals(2))
+        ElseIf StrComp(arrLine(0), """Variable4""=") = 0 Then                /* ***** */
+            strFinal = strFinal + ModifyDoc(arrLine, arrTestVals(3))
+        ElseIf StrComp(arrLine(0), """Variable5""=") = 0 Then                /* ***** */
+            strFinal = strFinal + ModifyDoc(arrLine, arrTestVals(4))
+        ElseIf StrComp(arrLine(0), """Variable6""=") = 0 Then                /* ***** */
+            strFinal = strFinal + ModifyDoc(arrLine, arrTestVals(5))
+        Else
+            strFinal = strFinal + strLine + vbCrLf
+        End If
+        
+Jump:         Erase arrLine
+    Loop
+    Close #1
+    Open "C:\Users\mtenuta\Documents\SolidworksProject\ModelEquations.txt" For Output As #1   /* ***** */
+    Print #1, LTrim(strFinal)
+    Close #1
+End Sub
+
+Function ModifyDoc(ByRef strInput() As String, ByVal testInput As String) As String
+    Dim strOutput As String
+    Dim count As Integer
+    For count = 0 To UBound(strInput)
+        If count = 1 Then
+            strOutput = strOutput + " " + testInput
+        Else
+            strOutput = strOutput + " " + strInput(count)
+        End If
+    Next count
+    strOutput = strOutput + vbCrLf
+        
+    ModifyDoc = LTrim(strOutput)
+End Function
+
+Public Function FileInUse(sFileName) As Boolean
+    On Error Resume Next
+    Open sFileName For Binary Access Read Lock Read As #1
+    Close #1
+    FileInUse = IIf(Err.Number > 0, True, False)
+    On Error GoTo 0
+End Function
+
+
+
+
+
+
+
+
+
+
